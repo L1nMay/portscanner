@@ -1,0 +1,32 @@
+# Путь до бинарника masscan (если masscan в PATH, можно просто "masscan")
+masscan_path: "masscan"
+
+# Список целей для сканирования
+targets:
+  - "192.168.0.0/24"
+  - "10.0.0.1"
+
+# Порты для сканирования (через запятую, формат, принимаемый masscan'ом)
+ports: "22,80,443"
+
+# Скорость сканирования пакетов в секунду (ограничение нагрузки)
+rate: 1000
+
+# Путь до файла БД (bbolt)
+db_path: "data/ports.db"
+
+# Таймауты
+connect_timeout_seconds: 3
+read_timeout_seconds: 3
+
+# Сколько байт баннера читать максимум
+banner_max_bytes: 1024
+
+# Настройки Telegram-уведомлений
+telegram:
+  enabled: true
+  bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
+  chat_id: "YOUR_CHAT_ID"
+
+# Общая информация
+scan_name: "Perimeter scan"
