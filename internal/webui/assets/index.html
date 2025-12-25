@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>PortScanner Web UI</title>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+
+<body class="app">
+<div class="app-root">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-icon">🛰️</div>
+        <div>
+          <div class="brand-title">PortScanner</div>
+          <div class="brand-subtitle">
+            Masscan + Nmap fallback • History • Banner
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btnScan" class="btn btn-primary">Run scan</button>
+        <button id="btnRefresh" class="btn">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="container">
+
+    <!-- STATS -->
+    <section class="stats">
+      <div class="stat-card">
+        <div class="stat-label">Total findings</div>
+        <div id="statFindings" class="stat-value">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unique hosts</div>
+        <div id="statHosts" class="stat-value">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Last scan</div>
+        <div id="statLastScan" class="stat-value small">—</div>
+        <div id="statLastScanMeta" class="stat-meta">—</div>
+      </div>
+    </section>
+
+    <!-- Scan control -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Scan configuration</div>
+          <div class="card-subtitle">
+            Choose target and ports for a fast validation scan
+          </div>
+        </div>
+      </div>
+
+      <div class="scan-form">
+        <div class="scan-field">
+          <label for="scanTarget">Target</label>
+          <input
+            id="scanTarget"
+            class="input"
+            placeholder="e.g. 10.12.0.6 or 10.12.0.0/28"
+          />
+        </div>
+
+        <div class="scan-field">
+          <label for="scanPorts">Ports</label>
+          <input
+            id="scanPorts"
+            class="input"
+            value="22,80,443"
+          />
+        </div>
+
+        <div class="scan-actions">
+          <button id="btnFastScan" class="btn btn-primary">
+            ▶ Run fast scan
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- FINDINGS -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Findings</div>
+          <div class="card-subtitle">
+            Search, filter by service, sort by last seen
+          </div>
+        </div>
+
+        <div class="filters">
+          <input id="q" class="input"
+                 placeholder="Search: ip, port, service, banner..." />
+          <select id="svc" class="select">
+            <option value="">All services</option>
+          </select>
+          <select id="sort" class="select">
+            <option value="lastSeenDesc">Last seen ↓</option>
+            <option value="lastSeenAsc">Last seen ↑</option>
+            <option value="ipAsc">IP ↑</option>
+            <option value="portAsc">Port ↑</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+          <tr>
+            <th>IP</th>
+            <th>Port</th>
+            <th>Service</th>
+            <th>First seen</th>
+            <th>Last seen</th>
+            <th>Banner</th>
+          </tr>
+          </thead>
+          <tbody id="tbl"></tbody>
+        </table>
+      </div>
+
+      <div class="table-footer">
+        <div id="count">—</div>
+        <div class="pager">
+          <button id="prev" class="btn">Prev</button>
+          <div id="page">—</div>
+          <button id="next" class="btn">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Scan history</div>
+          <div class="card-subtitle">Last 50 runs</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+          <tr>
+            <th>Started</th>
+            <th>Engine</th>
+            <th>Found</th>
+            <th>New</th>
+            <th>Ports</th>
+            <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody id="runs"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<div id="scanModal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Scan in progress</div>
+        <div id="scanMsg" class="modal-sub">Starting…</div>
+      </div>
+      <button class="btn" onclick="closeScanModal()">✕</button>
+    </div>
+
+    <div class="progress">
+      <div class="bar" id="scanBar"></div>
+    </div>
+
+    <div id="scanLog" class="log"></div>
+
+    <div class="modal-actions">
+      <button class="btn danger" onclick="cancelScan()">Stop scan</button>
+      <button class="btn" onclick="refresh()">Refresh</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

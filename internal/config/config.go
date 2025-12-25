@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -13,21 +13,34 @@ type TelegramConfig struct {
 	ChatID   string `yaml:"chat_id"`
 }
 
+type WebUIConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+}
+
 type Config struct {
-	MasscanPath       string         `yaml:"masscan_path"`
-	Targets           []string       `yaml:"targets"`
-	Ports             string         `yaml:"ports"`
-	Rate              int            `yaml:"rate"`
+	MasscanPath string   `yaml:"masscan_path"`
+	Targets     []string `yaml:"targets"`
+	Ports       string   `yaml:"ports"`
+	Rate        int      `yaml:"rate"`
+
+	WaitSeconds int    `yaml:"wait_seconds"`
+	Interface   string `yaml:"interface"`
+
 	DBPath            string         `yaml:"db_path"`
 	ConnectTimeoutSec int            `yaml:"connect_timeout_seconds"`
 	ReadTimeoutSec    int            `yaml:"read_timeout_seconds"`
 	BannerMaxBytes    int            `yaml:"banner_max_bytes"`
 	Telegram          TelegramConfig `yaml:"telegram"`
 	ScanName          string         `yaml:"scan_name"`
+
+	WebUI       WebUIConfig `yaml:"webui"`
+	AutoTargets bool        `yaml:"auto_targets"`
+	UserDefined bool        `yaml:"-"`
 }
 
 func LoadConfig(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +50,13 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Значения по умолчанию
+	// defaults
+	if cfg.MasscanPath == "" {
+		cfg.MasscanPath = "masscan"
+	}
+	if cfg.Rate <= 0 {
+		cfg.Rate = 1000
+	}
 	if cfg.ConnectTimeoutSec <= 0 {
 		cfg.ConnectTimeoutSec = 3
 	}
@@ -47,11 +66,11 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.BannerMaxBytes <= 0 {
 		cfg.BannerMaxBytes = 1024
 	}
-	if cfg.Rate <= 0 {
-		cfg.Rate = 1000
-	}
 	if cfg.ScanName == "" {
 		cfg.ScanName = "Port scanner"
+	}
+	if cfg.WebUI.Listen == "" {
+		cfg.WebUI.Listen = "127.0.0.1:8088"
 	}
 
 	return &cfg, nil

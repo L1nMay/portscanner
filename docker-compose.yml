@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  portscanner:
+    build: .
+    container_name: portscanner
+    network_mode: host        # 🔥 КЛЮЧЕВО
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped

@@ -1,0 +1,27 @@
+masscan_path: "masscan"
+
+targets: 
+  - "10.12.0.0/28"
+#targets: []
+#auto_targets: true
+
+ports: "auto"
+rate: 5000
+
+wait_seconds: 3
+interface: "docker0"   # ИЛИ интерфейс из `ip route`
+
+db_path: "data/ports.db"
+
+webui:
+  enabled: true
+  listen: "127.0.0.1:8088"
+
+connect_timeout_seconds: 3
+read_timeout_seconds: 3
+banner_max_bytes: 1024
+
+telegram:
+  enabled: false
+
+scan_name: "Local test"
