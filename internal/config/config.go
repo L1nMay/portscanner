@@ -14,8 +14,9 @@ type TelegramConfig struct {
 }
 
 type WebUIConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Listen  string `yaml:"listen"`
+	Enabled   bool   `yaml:"enabled"`
+	Listen    string `yaml:"listen"`
+	AuthToken string `yaml:"auth_token"` // NEW
 }
 
 type Config struct {
@@ -72,6 +73,8 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.WebUI.Listen == "" {
 		cfg.WebUI.Listen = "127.0.0.1:8088"
 	}
+	// если пустой токен — считаем что auth выключен (можно включить позже)
+	// cfg.WebUI.AuthToken может быть "".
 
 	return &cfg, nil
 }

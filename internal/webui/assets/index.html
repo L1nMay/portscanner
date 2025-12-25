@@ -24,6 +24,7 @@
       </div>
 
       <div class="header-actions">
+        <button id="btnPlan" class="btn">Scan plan</button>
         <button id="btnScan" class="btn btn-primary">Run scan</button>
         <button id="btnRefresh" class="btn">Refresh</button>
       </div>
@@ -170,6 +171,7 @@
   <div id="toast" class="toast hidden"></div>
 </div>
 
+<!-- FAST SCAN MODAL -->
 <div id="scanModal" class="modal hidden">
   <div class="modal-card">
     <div class="modal-head">
@@ -189,6 +191,62 @@
     <div class="modal-actions">
       <button class="btn danger" onclick="cancelScan()">Stop scan</button>
       <button class="btn" onclick="refresh()">Refresh</button>
+    </div>
+  </div>
+</div>
+
+<!-- PLAN MODAL -->
+<div id="planModal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Scan plan</div>
+        <div class="modal-sub">Dry-run preview (no scan executed)</div>
+      </div>
+      <button class="btn" onclick="closePlanModal()">✕</button>
+    </div>
+
+    <div class="plan-grid">
+      <div class="plan-field">
+        <label>Auth token</label>
+        <input id="authToken" class="input" placeholder="Bearer token…" />
+        <div class="hint">Saved in browser (localStorage). Used for /api/scan/plan and protected endpoints.</div>
+      </div>
+
+      <div class="plan-field">
+        <label>Targets</label>
+        <div id="planTargets" class="plan-box">—</div>
+      </div>
+
+      <div class="plan-field">
+        <label>Ports</label>
+        <div id="planPorts" class="plan-box">—</div>
+      </div>
+
+      <div class="plan-field">
+        <label>Engine</label>
+        <div id="planEngine" class="plan-box">—</div>
+      </div>
+
+      <div class="plan-field">
+        <label>Interface</label>
+        <div id="planIface" class="plan-box">—</div>
+      </div>
+
+      <div class="plan-field">
+        <label>Wait seconds</label>
+        <div id="planWait" class="plan-box">—</div>
+      </div>
+
+      <div class="plan-field plan-wide">
+        <label>Reason</label>
+        <div id="planReason" class="plan-box">—</div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button id="btnPlanReload" class="btn">Reload plan</button>
+      <button id="btnPlanRun" class="btn btn-primary">Run using this plan</button>
     </div>
   </div>
 </div>

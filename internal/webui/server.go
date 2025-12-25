@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/L1nMay/portscanner/internal/config"
@@ -28,11 +29,7 @@ type ScanRequest struct {
 }
 
 func NewServer(cfg *config.Config, store *storage.Storage, runner *scan.Runner) *Server {
-	return &Server{
-		cfg:    cfg,
-		store:  store,
-		runner: runner,
-	}
+	return &Server{cfg: cfg, store: store, runner: runner}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -48,7 +45,6 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(b)
 	})
-
 	mux.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
 		b, err := assetsFS.ReadFile("assets/app.js")
 		if err != nil {
@@ -58,7 +54,6 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		_, _ = w.Write(b)
 	})
-
 	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		b, err := assetsFS.ReadFile("assets/style.css")
 		if err != nil {
@@ -69,15 +64,49 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write(b)
 	})
 
-	// ---------- API ----------
+	// ---------- Health (no auth) ----------
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{
-			"ok": true,
-			"ts": time.Now().UTC(),
-		})
+		writeJSON(w, 200, map[string]any{"ok": true, "ts": time.Now().UTC()})
 	})
 
-	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
+	// ---------- SSE (ВАЖНО: БЕЗ AUTH, напрямую на mux) ----------
+	mux.HandleFunc("/api/scan/stream", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "stream unsupported", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		// полезно, если когда-то будет прокси
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		// сразу пошлём "комментарий", чтобы браузер точно открыл соединение
+		_, _ = w.Write([]byte(": ok\n\n"))
+		flusher.Flush()
+
+		ch := s.runner.HubSubscribe()
+		defer s.runner.HubUnsubscribe(ch)
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case b := <-ch:
+				_, _ = w.Write([]byte("data: "))
+				_, _ = w.Write(b)
+				_, _ = w.Write([]byte("\n\n"))
+				flusher.Flush()
+			}
+		}
+	})
+
+	// ---------- API (auth) ----------
+	api := http.NewServeMux()
+
+	api.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		st, err := s.store.GetStats()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -86,7 +115,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, st)
 	})
 
-	mux.HandleFunc("/api/results", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("/api/results", func(w http.ResponseWriter, r *http.Request) {
 		res, err := s.store.ListResults()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -95,7 +124,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, res)
 	})
 
-	mux.HandleFunc("/api/scans", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("/api/scans", func(w http.ResponseWriter, r *http.Request) {
 		runs, err := s.store.ListScanRuns(50)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -104,27 +133,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, runs)
 	})
 
-	// ---------- Default scan (ASYNC) ----------
-	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", 405)
-			return
-		}
-
-		if s.runner.IsRunning() {
-			http.Error(w, "scan already running", http.StatusConflict) // 409
-			return
-		}
-
-		cfg := *s.cfg
-		cfg.UserDefined = false
-
-		s.runner.RunAsync(&cfg)
-		writeJSON(w, 200, map[string]any{"status": "started"})
-	})
-
-	// ---------- Network info ----------
-	mux.HandleFunc("/api/netinfo", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("/api/netinfo", func(w http.ResponseWriter, r *http.Request) {
 		ni, err := envdetect.DetectNetInfo()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -133,24 +142,22 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, ni)
 	})
 
-	mux.HandleFunc("/api/networks", func(w http.ResponseWriter, r *http.Request) {
-		nets, err := envdetect.DetectLocalNetworks()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		writeJSON(w, 200, nets)
-	})
-
-	// ---------- Custom scan (ASYNC) ----------
-	mux.HandleFunc("/api/scan/custom", func(w http.ResponseWriter, r *http.Request) {
+	// общий scan — async
+	api.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", 405)
 			return
 		}
+		cfg := *s.cfg
+		cfg.UserDefined = false
+		s.runner.RunAsync(&cfg)
+		writeJSON(w, 200, map[string]any{"status": "started"})
+	})
 
-		if s.runner.IsRunning() {
-			http.Error(w, "scan already running", http.StatusConflict) // 409
+	// custom scan — async
+	api.HandleFunc("/api/scan/custom", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
 			return
 		}
 
@@ -174,36 +181,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"status": "started"})
 	})
 
-	// ---------- Scan progress (SSE) ----------
-	mux.HandleFunc("/api/scan/stream", func(w http.ResponseWriter, r *http.Request) {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "stream unsupported", 500)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		ch := s.runner.HubSubscribe()
-		defer s.runner.HubUnsubscribe(ch)
-
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case b := <-ch:
-				_, _ = w.Write([]byte("data: "))
-				_, _ = w.Write(b)
-				_, _ = w.Write([]byte("\n\n"))
-				flusher.Flush()
-			}
-		}
-	})
-
-	// ---------- Cancel scan ----------
-	mux.HandleFunc("/api/scan/cancel", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("/api/scan/cancel", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", 405)
 			return
@@ -212,7 +190,44 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"cancelled": ok})
 	})
 
+	api.HandleFunc("/api/scan/plan", func(w http.ResponseWriter, r *http.Request) {
+		plan, err := s.runner.Plan(s.cfg)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		writeJSON(w, 200, plan)
+	})
+
+	// ВЕСЬ /api/ (кроме /api/scan/stream и /api/health) — через auth
+	mux.Handle("/api/", withAuth(s.cfg, api))
+
 	return withCORS(withLogging(mux))
+}
+
+// ---------- AUTH ----------
+func withAuth(cfg *config.Config, next http.Handler) http.Handler {
+	if strings.TrimSpace(cfg.WebUI.AuthToken) == "" {
+		return next
+	}
+
+	want := strings.TrimSpace(cfg.WebUI.AuthToken)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := strings.TrimSpace(r.Header.Get("Authorization"))
+		if h == "" {
+			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+		if strings.HasPrefix(strings.ToLower(h), "bearer ") {
+			h = strings.TrimSpace(h[7:])
+		}
+		if h != want {
+			http.Error(w, "invalid token", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------- Middleware ----------

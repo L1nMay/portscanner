@@ -1,37 +1,57 @@
 (() => {
-  // ---------- helpers ----------
   const $ = (id) => document.getElementById(id);
 
-  const STATE = {
-    results: [],
-    runs: [],
-    page: 1,
-    pageSize: 20,
-  };
+  const STATE = { results: [], runs: [], page: 1, pageSize: 20 };
 
   // scan ui state
   let scanRunning = false;
-  let scanES = null; // single SSE connection
-  let scanWatchdog = null; // таймаут если прогресс не приходит
+  let scanES = null;
+
+  // plan ui state
+  let lastPlan = null;
 
   // ---------- toast ----------
   function toast(msg, type = "info", timeout = 2500) {
     const box = $("toast");
     if (!box) return;
-
     box.textContent = msg;
     box.classList.remove("hidden");
     box.dataset.type = type;
-
     setTimeout(() => box.classList.add("hidden"), timeout);
   }
 
-  async function api(path, opts) {
-    const res = await fetch(path, opts);
+  // ---------- auth token ----------
+  const TOKEN_KEY = "portscanner_auth_token";
+
+  function getToken() {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  }
+
+  function setToken(v) {
+    localStorage.setItem(TOKEN_KEY, v || "");
+  }
+
+  function authHeaders(extra = {}) {
+    const token = getToken().trim();
+    if (!token) return extra;
+
+    const value = token.toLowerCase().startsWith("bearer ")
+      ? token
+      : `Bearer ${token}`;
+
+    return { ...extra, Authorization: value };
+  }
+
+  async function api(path, opts = {}) {
+    const o = { ...opts };
+    o.headers = authHeaders(o.headers || {});
+    const res = await fetch(path, o);
+
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       throw new Error(txt || res.statusText);
     }
+
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("application/json")) return null;
     return res.json();
@@ -39,20 +59,12 @@
 
   function fmt(ts) {
     if (!ts) return "—";
-    try {
-      return new Date(ts).toLocaleString();
-    } catch {
-      return String(ts);
-    }
+    try { return new Date(ts).toLocaleString(); } catch { return String(ts); }
   }
 
   function escapeHtml(str) {
     return String(str ?? "").replace(/[&<>"']/g, (s) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[s]));
   }
 
@@ -70,9 +82,7 @@
 
     let items = STATE.results.slice();
 
-    if (svc) {
-      items = items.filter((r) => String(r.service || "").toLowerCase() === svc);
-    }
+    if (svc) items = items.filter((r) => String(r.service || "").toLowerCase() === svc);
 
     if (q) {
       items = items.filter((r) => {
@@ -88,8 +98,6 @@
       if (sort === "lastSeenAsc") return aLS - bLS;
       if (sort === "ipAsc") return ipToNum(a.ip) - ipToNum(b.ip);
       if (sort === "portAsc") return (a.port || 0) - (b.port || 0);
-
-      // default lastSeenDesc
       return bLS - aLS;
     });
 
@@ -101,11 +109,8 @@
     if (!svcSel) return;
 
     const current = (svcSel.value || "").toLowerCase();
-
     const services = Array.from(
-      new Set(
-        STATE.results.map((r) => String((r.service || "unknown")).trim().toLowerCase())
-      )
+      new Set(STATE.results.map((r) => String((r.service || "unknown")).trim().toLowerCase()))
     ).sort();
 
     svcSel.innerHTML =
@@ -134,30 +139,23 @@
     const pageItems = items.slice(start, start + STATE.pageSize);
 
     tbody.innerHTML = "";
-
     if (pageItems.length === 0) {
-      tbody.innerHTML =
-        `<tr><td colspan="6" style="padding:12px;color:#94a3b8">No findings</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" style="padding:12px;color:#94a3b8">No findings</td></tr>`;
     } else {
-      tbody.innerHTML = pageItems
-        .map((x) => `
-          <tr>
-            <td>${escapeHtml(x.ip)}</td>
-            <td>${escapeHtml(String(x.port))}/${escapeHtml(String(x.proto || "tcp"))}</td>
-            <td>${escapeHtml(x.service || "unknown")}</td>
-            <td>${escapeHtml(fmt(x.first_seen))}</td>
-            <td>${escapeHtml(fmt(x.last_seen))}</td>
-            <td title="${escapeHtml(String(x.banner || ""))}">
-              ${escapeHtml(x.banner || "—")}
-            </td>
-          </tr>
-        `)
-        .join("");
+      tbody.innerHTML = pageItems.map((x) => `
+        <tr>
+          <td>${escapeHtml(x.ip)}</td>
+          <td>${escapeHtml(String(x.port))}/${escapeHtml(String(x.proto || "tcp"))}</td>
+          <td>${escapeHtml(x.service || "unknown")}</td>
+          <td>${escapeHtml(fmt(x.first_seen))}</td>
+          <td>${escapeHtml(fmt(x.last_seen))}</td>
+          <td title="${escapeHtml(String(x.banner || ""))}">${escapeHtml(x.banner || "—")}</td>
+        </tr>
+      `).join("");
     }
 
     if (count) count.textContent = `Showing ${pageItems.length} of ${total}`;
     if (pageEl) pageEl.textContent = `Page ${STATE.page} / ${totalPages}`;
-
     if (prevBtn) prevBtn.disabled = STATE.page <= 1;
     if (nextBtn) nextBtn.disabled = STATE.page >= totalPages;
   }
@@ -166,31 +164,27 @@
     const tbody = $("runs");
     if (!tbody) return;
 
-    tbody.innerHTML = STATE.runs
-      .map((r) => `
-        <tr>
-          <td>${escapeHtml(fmt(r.started_at))}</td>
-          <td>${escapeHtml(r.engine)}</td>
-          <td>${escapeHtml(String(r.found))}</td>
-          <td>${escapeHtml(String(r.new_found))}</td>
-          <td>${escapeHtml(String(r.ports_spec || ""))}</td>
-          <td>${escapeHtml(r.notes || "—")}</td>
-        </tr>
-      `)
-      .join("");
+    tbody.innerHTML = STATE.runs.map((r) => `
+      <tr>
+        <td>${escapeHtml(fmt(r.started_at))}</td>
+        <td>${escapeHtml(r.engine)}</td>
+        <td>${escapeHtml(String(r.found))}</td>
+        <td>${escapeHtml(String(r.new_found))}</td>
+        <td>${escapeHtml(String(r.ports_spec || ""))}</td>
+        <td>${escapeHtml(r.notes || "—")}</td>
+      </tr>
+    `).join("");
 
     const last = STATE.runs[0];
     if (last) {
       $("statLastScan").textContent = fmt(last.started_at);
-      $("statLastScanMeta").textContent =
-        `${last.engine} • found ${last.found} • new ${last.new_found}`;
+      $("statLastScanMeta").textContent = `${last.engine} • found ${last.found} • new ${last.new_found}`;
     } else {
       $("statLastScan").textContent = "—";
       $("statLastScanMeta").textContent = "—";
     }
   }
 
-  // ---------- data loading ----------
   async function refreshAll() {
     const st = await api("/api/stats");
     if (st) {
@@ -229,7 +223,7 @@
     const m = $("scanModal");
     if (!m) return;
     m.classList.remove("hidden");
-    m.style.display = "flex"; // оставляем твой “жёсткий” вариант
+    m.style.display = "flex";
   }
 
   function closeScanModal() {
@@ -240,7 +234,6 @@
     m.classList.add("hidden");
 
     scanRunning = false;
-
     if ($("scanLog")) $("scanLog").textContent = "";
     setProgress(0, "");
 
@@ -248,24 +241,9 @@
       scanES.close();
       scanES = null;
     }
-
-    if (scanWatchdog) {
-      clearTimeout(scanWatchdog);
-      scanWatchdog = null;
-    }
   }
 
-  function kickWatchdog() {
-    if (scanWatchdog) clearTimeout(scanWatchdog);
-    // если 20 секунд нет ни одного события — считаем что повисло
-    scanWatchdog = setTimeout(() => {
-      if (!scanRunning) return;
-      toast("No progress events from server (scan stuck?)", "error", 4000);
-      appendLog("[watchdog] no progress for 20s, closing");
-      closeScanModal();
-    }, 20000);
-  }
-
+  // ✅ SSE всегда без токена (сервер stream без auth)
   function startProgressStream() {
     if (scanES) {
       scanES.close();
@@ -274,19 +252,11 @@
 
     scanES = new EventSource("/api/scan/stream");
 
-    kickWatchdog();
-
     scanES.onmessage = (e) => {
       let p;
-      try {
-        p = JSON.parse(e.data);
-      } catch {
-        return;
-      }
+      try { p = JSON.parse(e.data); } catch { return; }
 
       if (!scanRunning) return;
-
-      kickWatchdog();
 
       const percent = Number(p.percent ?? 0);
       const message = String(p.message ?? "");
@@ -297,7 +267,6 @@
       const msgLower = message.toLowerCase();
       const done =
         percent >= 100 ||
-        msgLower.includes("scan finished") ||
         msgLower.includes("finished") ||
         msgLower.includes("done") ||
         msgLower.includes("cancel") ||
@@ -312,11 +281,6 @@
           scanES = null;
         }
 
-        if (scanWatchdog) {
-          clearTimeout(scanWatchdog);
-          scanWatchdog = null;
-        }
-
         setTimeout(async () => {
           closeScanModal();
           await refreshAll().catch(() => {});
@@ -326,16 +290,16 @@
 
     scanES.onerror = () => {
       if (scanRunning) {
-        toast("Progress stream disconnected", "error");
-        appendLog("[stream] disconnected");
+        scanRunning = false;
         closeScanModal();
+        toast("Progress stream disconnected", "error");
       }
     };
   }
 
   async function cancelScan() {
     try {
-      await fetch("/api/scan/cancel", { method: "POST" });
+      await fetch("/api/scan/cancel", { method: "POST", headers: authHeaders({}) });
       appendLog("[action] cancel requested");
       toast("Cancel requested", "info");
       closeScanModal();
@@ -344,44 +308,69 @@
     }
   }
 
-  // ---------- unified scan starter ----------
-  async function startAsyncScan(fetchFn) {
-    if (scanRunning) return;
+  // ---------- plan modal helpers ----------
+  function openPlanModal() {
+    const m = $("planModal");
+    if (!m) return;
+    m.classList.remove("hidden");
+    m.style.display = "flex";
+  }
 
+  function closePlanModal() {
+    const m = $("planModal");
+    if (!m) return;
+    m.style.display = "none";
+    m.classList.add("hidden");
+  }
+
+  function renderPlan(plan) {
+    lastPlan = plan;
+    $("planTargets").textContent = Array.isArray(plan.targets) ? plan.targets.join("\n") : String(plan.targets || "—");
+    $("planPorts").textContent = plan.ports || "—";
+    $("planEngine").textContent = plan.engine || "—";
+    $("planIface").textContent = plan.interface || "—";
+    $("planWait").textContent = String(plan.wait_seconds ?? "—");
+    $("planReason").textContent = plan.reason || "—";
+  }
+
+  async function loadPlan() {
+    const plan = await api("/api/scan/plan");
+    renderPlan(plan);
+    return plan;
+  }
+
+  // ---------- unified scan start (важно: все run-ы идут через модалку+SSE) ----------
+  function startScanUI(startMsg) {
+    if (scanRunning) return false;
     scanRunning = true;
     openScanModal();
-    setProgress(3, "Starting...");
-    appendLog(`[${new Date().toLocaleTimeString()}] 3% Starting...`);
-
+    setProgress(3, startMsg || "Starting...");
+    appendLog(`[${new Date().toLocaleTimeString()}] 3% ${startMsg || "Starting..."}`);
     startProgressStream();
+    return true;
+  }
+
+  async function runFullScan() {
+    if (!startScanUI("Starting full scan...")) return;
 
     try {
-      const res = await fetchFn();
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: authHeaders({}),
+      });
+
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
-        throw new Error(txt || "scan start failed");
+        throw new Error(txt || `scan failed (${res.status})`);
       }
-      toast("Scan started", "ok");
+
+      toast("Full scan started", "ok");
+      // дальше UI ждёт прогресс по SSE
     } catch (e) {
       scanRunning = false;
       closeScanModal();
       toast(`Scan start failed: ${e.message}`, "error");
     }
-  }
-
-  // ---------- actions ----------
-  async function runFullScan() {
-    // ВАЖНО: /api/scan у тебя сейчас может быть синхронным или асинхронным.
-    // Для WebUI мы работаем как с ASYNC: запускаем SSE и сразу стартуем.
-    const btn = $("btnScan");
-    const prevText = btn?.textContent || "Run scan";
-    if (btn) { btn.disabled = true; btn.textContent = "Starting..."; }
-
-    await startAsyncScan(() =>
-      fetch("/api/scan", { method: "POST" })
-    );
-
-    if (btn) { btn.disabled = false; btn.textContent = prevText; }
   }
 
   async function runFastScan() {
@@ -393,56 +382,120 @@
       return;
     }
 
-    await startAsyncScan(() =>
-      fetch("/api/scan/custom", {
+    if (!startScanUI("Starting fast scan...")) return;
+
+    try {
+      const res = await fetch("/api/scan/custom", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ targets: [target], ports }),
-      })
-    );
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || "scan start failed");
+      }
+
+      toast("Fast scan started", "ok");
+    } catch (e) {
+      scanRunning = false;
+      closeScanModal();
+      toast(`Scan start failed: ${e.message}`, "error");
+    }
+  }
+
+  async function runUsingPlan() {
+    try {
+      const plan = lastPlan || (await loadPlan());
+
+      if (!startScanUI("Starting from plan...")) return;
+
+      // по плану используем custom
+      const res = await fetch("/api/scan/custom", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          targets: plan.targets || [],
+          ports: plan.ports || "auto",
+        }),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `scan/custom failed (${res.status})`);
+      }
+
+      toast("Scan started (from plan)", "ok");
+      closePlanModal();
+    } catch (e) {
+      scanRunning = false;
+      closeScanModal();
+      toast(`Run using plan failed: ${e.message}`, "error");
+    }
   }
 
   // ---------- wiring ----------
   function bindUI() {
-    $("btnRefresh")?.addEventListener("click", () =>
-      refreshAll().catch((e) => toast(e.message, "error"))
-    );
-
+    $("btnRefresh")?.addEventListener("click", () => refreshAll().catch((e) => toast(e.message, "error")));
     $("btnScan")?.addEventListener("click", () => runFullScan());
     $("btnFastScan")?.addEventListener("click", () => runFastScan());
 
     ["q", "svc", "sort"].forEach((id) => {
-      $(id)?.addEventListener("input", () => {
-        STATE.page = 1;
-        renderResults();
-      });
-      $(id)?.addEventListener("change", () => {
-        STATE.page = 1;
-        renderResults();
-      });
+      $(id)?.addEventListener("input", () => { STATE.page = 1; renderResults(); });
+      $(id)?.addEventListener("change", () => { STATE.page = 1; renderResults(); });
     });
 
     $("prev")?.addEventListener("click", () => {
-      if (STATE.page > 1) {
-        STATE.page--;
-        renderResults();
-      }
+      if (STATE.page > 1) { STATE.page--; renderResults(); }
     });
 
     $("next")?.addEventListener("click", () => {
       STATE.page++;
       renderResults();
     });
+
+    // plan buttons
+    $("btnPlan")?.addEventListener("click", async () => {
+      openPlanModal();
+      const t = $("authToken");
+      if (t) t.value = getToken();
+
+      try {
+        await loadPlan();
+        toast("Plan loaded", "ok");
+      } catch (e) {
+        toast(e.message || "Failed to load plan", "error");
+      }
+    });
+
+    $("btnPlanReload")?.addEventListener("click", async () => {
+      try {
+        await loadPlan();
+        toast("Plan reloaded", "ok");
+      } catch (e) {
+        toast(e.message || "Failed to load plan", "error");
+      }
+    });
+
+    $("btnPlanRun")?.addEventListener("click", async () => {
+      await runUsingPlan();
+    });
+
+    $("authToken")?.addEventListener("input", (e) => {
+      setToken(e.target.value);
+    });
   }
 
-  // expose for inline onclick in index.html
+  // expose inline handlers
   window.closeScanModal = closeScanModal;
   window.cancelScan = cancelScan;
   window.refresh = () => refreshAll().catch((e) => toast(e.message, "error"));
+  window.closePlanModal = closePlanModal;
 
-  // ---------- init ----------
   document.addEventListener("DOMContentLoaded", async () => {
     closeScanModal();
+    closePlanModal();
+
     bindUI();
 
     try {
