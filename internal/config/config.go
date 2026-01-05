@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -16,7 +17,11 @@ type TelegramConfig struct {
 type WebUIConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	Listen    string `yaml:"listen"`
-	AuthToken string `yaml:"auth_token"` // NEW
+	AuthToken string `yaml:"auth_token"`
+}
+
+type DatabaseConfig struct {
+	DSN string `yaml:"dsn"`
 }
 
 type Config struct {
@@ -28,12 +33,14 @@ type Config struct {
 	WaitSeconds int    `yaml:"wait_seconds"`
 	Interface   string `yaml:"interface"`
 
-	DBPath            string         `yaml:"db_path"`
-	ConnectTimeoutSec int            `yaml:"connect_timeout_seconds"`
-	ReadTimeoutSec    int            `yaml:"read_timeout_seconds"`
-	BannerMaxBytes    int            `yaml:"banner_max_bytes"`
-	Telegram          TelegramConfig `yaml:"telegram"`
-	ScanName          string         `yaml:"scan_name"`
+	ConnectTimeoutSec int `yaml:"connect_timeout_seconds"`
+	ReadTimeoutSec    int `yaml:"read_timeout_seconds"`
+	BannerMaxBytes    int `yaml:"banner_max_bytes"`
+
+	Database DatabaseConfig `yaml:"database"`
+	Telegram TelegramConfig `yaml:"telegram"`
+
+	ScanName string `yaml:"scan_name"`
 
 	WebUI       WebUIConfig `yaml:"webui"`
 	AutoTargets bool        `yaml:"auto_targets"`
@@ -49,6 +56,11 @@ func LoadConfig(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
+	}
+
+	// ENV override (удобно для Docker)
+	if v := os.Getenv("DATABASE_DSN"); v != "" {
+		cfg.Database.DSN = v
 	}
 
 	// defaults
@@ -73,8 +85,10 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.WebUI.Listen == "" {
 		cfg.WebUI.Listen = "127.0.0.1:8088"
 	}
-	// если пустой токен — считаем что auth выключен (можно включить позже)
-	// cfg.WebUI.AuthToken может быть "".
+
+	if cfg.Database.DSN == "" {
+		return nil, fmt.Errorf("database.dsn is empty (set in config.yaml or via DATABASE_DSN env)")
+	}
 
 	return &cfg, nil
 }

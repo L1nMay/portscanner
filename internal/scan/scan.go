@@ -19,11 +19,16 @@ import (
 
 type Runner struct {
 	cfg   *config.Config
+	pg *storage.Postgres
 	store *storage.Storage
 	mu    sync.Mutex
 
 	muCancel cancelState
 	hub      *Hub
+}
+
+func (r *Runner) SetPostgres(pg *storage.Postgres) {
+	r.pg = pg
 }
 
 func NewRunner(cfg *config.Config, store *storage.Storage) *Runner {

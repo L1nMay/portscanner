@@ -28,9 +28,14 @@ WORKDIR /app
 
 COPY --from=builder /app/scanner /app/scanner
 COPY --from=builder /app/webui /app/webui
+
+# ✅ ВАЖНО: миграции должны быть в рантайме
+COPY --from=builder /app/migrations /app/migrations
+
+# опционально: дефолтный конфиг (в docker-compose ты всё равно монтируешь свой)
 COPY config.example.yaml /app/config.yaml
 
-# директория под БД
+# директория под данные
 RUN mkdir -p /data
 
 EXPOSE 8088

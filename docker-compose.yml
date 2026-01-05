@@ -4,7 +4,6 @@ services:
   portscanner:
     build: .
     container_name: portscanner
-    network_mode: host        # 🔥 КЛЮЧЕВО
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -12,3 +11,22 @@ services:
       - ./data:/data
       - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_DSN: postgres://portscanner:portscanner@postgres:5432/portscanner?sslmode=disable
+    ports:
+      - "8088:8088" 
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portscanner
+      POSTGRES_USER: portscanner
+      POSTGRES_PASSWORD: portscanner
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

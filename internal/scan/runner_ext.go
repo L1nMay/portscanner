@@ -20,14 +20,17 @@ RunAsync — неблокирующий запуск скана
 */
 func (r *Runner) RunAsync(cfg *config.Config) {
 	go func() {
-		_, _, _ = r.RunOnceWithContext(cfg)
+		_, err := r.RunOnceWithContext(cfg)
+		if err != nil {
+			logger.Errorf("async scan error: %v", err)
+		}
 	}()
 }
 
 /*
 RunOnceWithContext — управляет mutex, ctx/cancel, hub
 */
-func (r *Runner) RunOnceWithContext(cfg *config.Config) (*model.ScanRun, []*model.ScanResult, error) {
+func (r *Runner) RunOnceWithContext(cfg *config.Config) (*model.ScanRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -42,45 +45,37 @@ func (r *Runner) RunOnceWithContext(cfg *config.Config) (*model.ScanRun, []*mode
 
 	r.hub.Publish(Progress{Percent: 5, Message: "Scan started"})
 
-	run, newOnes, err := r.RunOnceCtx(ctx)
+	run, err := r.RunOnceCtx(ctx)
 	if err != nil {
-		// финальное событие (важно для UI)
 		msg := err.Error()
 		if ctx.Err() != nil {
 			msg = "Scan cancelled"
 		}
 		r.hub.Publish(Progress{Percent: 100, Message: msg})
-		return nil, nil, err
+		return nil, err
 	}
 
 	r.hub.Publish(Progress{Percent: 100, Message: "Scan finished"})
-	return run, newOnes, nil
+	return run, nil
 }
 
 /*
 RunOnceCtx — ctx-aware версия RunOnce
-ВАЖНО:
-- без mutex (mutex берётся в RunOnceWithContext)
-- masscan.RunCtx / nmap.RunCtx
-- проверка ctx.Done()
-- hub.Publish() по этапам
 */
-func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanResult, error) {
-	// pre-flight cancel
+func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	r.hub.Publish(Progress{Percent: 10, Message: "Pre-flight checks"})
 
-	// pre-flight
 	if err := checkBinary("nmap"); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := checkBinary(r.cfg.MasscanPath); err != nil {
-		logger.Errorf("masscan check: %v", err)
+		logger.Errorf("masscan check failed: %v", err)
 	}
 
 	// auto targets
@@ -90,13 +85,11 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 			cidr := ni.SrcIP + "/24"
 			r.cfg.Targets = []string{cidr}
 			logger.Infof("Auto targets enabled: %s", cidr)
-		} else {
-			logger.Errorf("Auto targets failed: %v", err)
 		}
 	}
 
 	if len(r.cfg.Targets) == 0 {
-		return nil, nil, fmt.Errorf("no scan targets specified")
+		return nil, fmt.Errorf("no scan targets specified")
 	}
 
 	dec := envdetect.Decide(r.cfg.Targets)
@@ -106,9 +99,6 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 		ifc, err := envdetect.DetectDefaultInterface()
 		if err == nil {
 			r.cfg.Interface = ifc
-			logger.Infof("Auto-detected interface: %s", ifc)
-		} else {
-			logger.Errorf("Failed to auto-detect interface: %v", err)
 		}
 	}
 
@@ -116,10 +106,8 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 	wait := r.cfg.WaitSeconds
 	if wait <= 0 {
 		wait = dec.WaitSeconds
-		logger.Infof("Auto wait_seconds=%d (reason: %s)", wait, dec.Reason)
 	}
 
-	// resolve ports BEFORE engines
 	resolvedPorts := resolvePorts(r.cfg.Ports, dec.PreferredEngine)
 
 	run := &model.ScanRun{
@@ -142,14 +130,10 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 		engineUsed = dec.PreferredEngine
 	)
 
-	// ---- primary engine ----
 	if dec.PreferredEngine == "masscan" {
 		r.hub.Publish(Progress{Percent: 30, Message: "Running masscan"})
 		mr, err := masscan.RunCtx(ctx, &engineCfg)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
+		if err != nil && ctx.Err() == nil {
 			logger.Errorf("masscan error: %v", err)
 		}
 		found = mr
@@ -160,10 +144,7 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 
 			nr, err := nmap.RunCtx(ctx, &engineCfg)
 			if err != nil {
-				if ctx.Err() != nil {
-					return nil, nil, ctx.Err()
-				}
-				return nil, nil, err
+				return nil, err
 			}
 			for _, rr := range nr {
 				found = append(found, masscan.Result{
@@ -177,10 +158,7 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 		r.hub.Publish(Progress{Percent: 35, Message: "Running nmap"})
 		nr, err := nmap.RunCtx(ctx, &engineCfg)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return nil, nil, err
+			return nil, err
 		}
 		engineUsed = "nmap"
 		for _, rr := range nr {
@@ -192,21 +170,17 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 		}
 	}
 
-	// ---- pipeline ----
 	r.hub.Publish(Progress{Percent: 70, Message: "Analyzing banners & storing results"})
 
-	newOnes := []*model.ScanResult{}
 	totalFound := 0
 	newFound := 0
 	seen := map[string]struct{}{}
-
-	// чтобы прогресс не “застревал” визуально
 	lastTick := time.Now()
 
 	for i, fr := range found {
 		select {
 		case <-ctx.Done():
-			return nil, nil, ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
 
@@ -222,31 +196,36 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 			svc = "unknown"
 		}
 
-		res := &model.ScanResult{
-			IP:      fr.IP,
-			Port:    fr.Port,
-			Proto:   strings.ToLower(fr.Proto),
-			Banner:  bnr,
-			Service: svc,
-		}
-
-		isNew, err := r.store.UpsertResult(res)
+		hostID, err := r.pg.UpsertHost(fr.IP)
 		if err != nil {
-			logger.Errorf("store upsert error for %s: %v", key, err)
+			logger.Errorf("upsert host error: %v", err)
 			continue
 		}
-		if isNew {
-			newFound++
-			newOnes = append(newOnes, res)
+
+		isNew, err := r.pg.UpsertPort(
+			hostID,
+			int(fr.Port),
+			strings.ToLower(fr.Proto),
+			svc,
+			bnr,
+		)
+		if err != nil {
+			logger.Errorf("upsert port error: %v", err)
+			continue
 		}
 
-		// лёгкий “живой” прогресс (не спамим каждую запись)
+		if isNew {
+			newFound++
+			_ = r.pg.AddEvent("new_port", map[string]any{
+				"ip":      fr.IP,
+				"port":    fr.Port,
+				"service": svc,
+			})
+		}
+
 		if time.Since(lastTick) > 700*time.Millisecond {
 			lastTick = time.Now()
-			p := 70
-			if len(found) > 0 {
-				p = 70 + int(float64(i+1)/float64(len(found))*25.0) // 70..95
-			}
+			p := 70 + int(float64(i+1)/float64(len(found))*25.0)
 			r.hub.Publish(Progress{Percent: p, Message: fmt.Sprintf("Processed %d/%d", i+1, len(found))})
 		}
 	}
@@ -259,5 +238,5 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, []*model.ScanR
 	_ = r.store.AddScanRun(run)
 
 	r.hub.Publish(Progress{Percent: 98, Message: "Finalizing"})
-	return run, newOnes, nil
+	return run, nil
 }

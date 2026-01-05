@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/L1nMay/portscanner/internal/config"
 	"github.com/L1nMay/portscanner/internal/logger"
@@ -22,22 +20,26 @@ func main() {
 		logger.Fatalf("failed to load config: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
-		logger.Fatalf("failed to create db dir: %v", err)
-	}
-
-	store, err := storage.NewStorage(cfg.DBPath)
+	pg, err := storage.NewPostgres(cfg.Database.DSN)
 	if err != nil {
-		logger.Fatalf("failed to open storage: %v", err)
+		logger.Fatalf("failed to connect postgres: %v", err)
 	}
-	defer store.Close()
+	defer pg.Close()
 
-	runner := scan.NewRunner(cfg, store)
-	srv := webui.NewServer(cfg, store, runner)
+	// migrations
+	if err := pg.Migrate("./migrations"); err != nil {
+		logger.Fatalf("migrations failed: %v", err)
+	}
 
-	addr := cfg.WebUI.Listen
-	logger.Infof("Web UI listening on http://%s", addr)
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		logger.Fatalf("web ui server error: %v", err)
+	// runner
+	runner := scan.NewRunner(cfg, nil)
+	runner.SetPostgres(pg)
+
+	// web ui
+	server := webui.NewServer(cfg, pg, runner)
+
+	logger.Infof("Web UI listening on http://%s", cfg.WebUI.Listen)
+	if err := http.ListenAndServe(cfg.WebUI.Listen, server.Handler()); err != nil {
+		logger.Fatalf("web ui error: %v", err)
 	}
 }

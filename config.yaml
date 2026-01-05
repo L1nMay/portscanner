@@ -2,30 +2,32 @@ masscan_path: "masscan"
 
 targets:
   - "10.12.0.6/32"
-  - "127.0.0.0"
-  - "192.168.49.1"
+  - "127.0.0.0/32"
+  - "192.168.49.1/32"
+
 auto_targets: false
-# targets: []
 # auto_targets: true
+# targets: []
 
 ports: "auto"
 rate: 5000
 
 wait_seconds: 3
-interface: "docker0"   # ИЛИ интерфейс из `ip route`
-
-db_path: "data/ports.db"
-
-webui:
-  enabled: true
-  listen: "127.0.0.1:8088"
-  auth_token: "95fb1b878dd6464a09c57f14c780891f20141dca4fdd189e44ede7c649e74e81"
+interface: "docker0"
 
 connect_timeout_seconds: 3
 read_timeout_seconds: 3
 banner_max_bytes: 1024
 
+scan_name: "Local test"
+
+postgres:
+  dsn: "postgres://portscanner:portscanner@postgres:5432/portscanner?sslmode=disable"
+
+webui:
+  enabled: true
+  listen: "0.0.0.0:8088"
+  auth_token: "95fb1b878dd6464a09c57f14c780891f20141dca4fdd189e44ede7c649e74e81"
+
 telegram:
   enabled: false
-
-scan_name: "Local test"

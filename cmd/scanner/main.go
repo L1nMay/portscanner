@@ -2,12 +2,9 @@ package main
 
 import (
 	"flag"
-	"os"
-	"path/filepath"
 
 	"github.com/L1nMay/portscanner/internal/config"
 	"github.com/L1nMay/portscanner/internal/logger"
-	"github.com/L1nMay/portscanner/internal/notifier"
 	"github.com/L1nMay/portscanner/internal/scan"
 	"github.com/L1nMay/portscanner/internal/storage"
 )
@@ -21,33 +18,32 @@ func main() {
 		logger.Fatalf("failed to load config: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
-		logger.Fatalf("failed to create db dir: %v", err)
-	}
-
-	store, err := storage.NewStorage(cfg.DBPath)
+	// DSN берём из cfg.Database.DSN (туда уже может прилететь ENV DATABASE_DSN через override в LoadConfig)
+	pg, err := storage.NewPostgres(cfg.Database.DSN)
 	if err != nil {
-		logger.Fatalf("failed to open storage: %v", err)
+		logger.Fatalf("failed to connect postgres: %v", err)
 	}
-	defer store.Close()
+	defer pg.Close()
 
-	var notif notifier.Notifier
-	if cfg.Telegram.Enabled {
-		notif = notifier.NewTelegramNotifier(cfg)
+	// migrations
+	if err := pg.Migrate("./migrations"); err != nil {
+		logger.Fatalf("migrations failed: %v", err)
 	}
 
-	r := scan.NewRunner(cfg, store)
+	// runner
+	runner := scan.NewRunner(cfg, nil)
+	runner.SetPostgres(pg)
 
-	run, newOnes, err := r.RunOnce()
+	run, _, err := runner.RunOnce()
 	if err != nil {
 		logger.Fatalf("scan failed: %v", err)
 	}
 
-	logger.Infof("scan finished: engine=%s found=%d new=%d", run.Engine, run.Found, run.NewFound)
-
-	if notif != nil && len(newOnes) > 0 {
-		if err := notif.NotifyNewOpenPorts(newOnes); err != nil {
-			logger.Errorf("notification error: %v", err)
-		}
-	}
+	logger.Infof(
+		"scan finished: engine=%s targets=%d found=%d new=%d",
+		run.Engine,
+		run.TargetsCount,
+		run.Found,
+		run.NewFound,
+	)
 }

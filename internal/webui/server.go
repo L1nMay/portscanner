@@ -18,9 +18,9 @@ import (
 var assetsFS embed.FS
 
 type Server struct {
-	store  *storage.Storage
-	runner *scan.Runner
-	cfg    *config.Config
+    pg     *storage.Postgres
+    runner *scan.Runner
+    cfg    *config.Config
 }
 
 type ScanRequest struct {
@@ -28,8 +28,12 @@ type ScanRequest struct {
 	Ports   string   `json:"ports"`
 }
 
-func NewServer(cfg *config.Config, store *storage.Storage, runner *scan.Runner) *Server {
-	return &Server{cfg: cfg, store: store, runner: runner}
+func NewServer(cfg *config.Config, pg *storage.Postgres, runner *scan.Runner) *Server {
+    return &Server{
+        cfg:    cfg,
+        pg:     pg,
+        runner: runner,
+    }
 }
 
 func (s *Server) Handler() http.Handler {
@@ -107,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 
 	api.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		st, err := s.store.GetStats()
+		st, err := s.pg.GetStats()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -116,7 +120,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	api.HandleFunc("/api/results", func(w http.ResponseWriter, r *http.Request) {
-		res, err := s.store.ListResults()
+		res, err := s.pg.ListResults()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -125,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	api.HandleFunc("/api/scans", func(w http.ResponseWriter, r *http.Request) {
-		runs, err := s.store.ListScanRuns(50)
+		runs, err := s.pg.ListScanRuns(50)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
