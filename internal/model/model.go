@@ -7,7 +7,7 @@ import (
 
 type ScanResult struct {
 	IP        string    `json:"ip"`
-	Port      uint16    `json:"port"`
+	Port      int       `json:"port"` // ✅ int (чтобы не ломать сериализацию/UI и хранение)
 	Proto     string    `json:"proto"`
 	Banner    string    `json:"banner,omitempty"`
 	Service   string    `json:"service,omitempty"`
@@ -20,13 +20,16 @@ func (r *ScanResult) Key() string {
 }
 
 type ScanRun struct {
-	ID           string    `json:"id"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	TargetsCount int       `json:"targets_count"`
-	PortsSpec    string    `json:"ports_spec"`
-	Engine       string    `json:"engine"` // masscan|nmap|mixed
-	Found        int       `json:"found"`
-	NewFound     int       `json:"new_found"`
-	Notes        string    `json:"notes,omitempty"`
+	ID         string    `json:"id"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+
+	TargetsCount int    `json:"targets_count"` // ✅ чтобы не падали struct literals
+	PortsSpec    string `json:"ports_spec"`
+	Engine       string `json:"engine"` // masscan|nmap|mixed
+
+	Found    int `json:"found"`
+	NewFound int `json:"new_found"`
+
+	Notes string `json:"notes,omitempty"`
 }

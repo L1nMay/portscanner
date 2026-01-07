@@ -1,15 +1,28 @@
 package storage
 
-import "github.com/L1nMay/portscanner/internal/model"
+import (
+	"time"
+)
 
-func (p *Postgres) ListResults() ([]*model.ScanResult, error) {
+// DTO для WebUI (ТОЛЬКО то, что ждёт frontend)
+type ResultRow struct {
+	IP        string    `json:"ip"`
+	Port      int       `json:"port"`
+	Proto     string    `json:"proto"`
+	Service   string    `json:"service"`
+	Banner    string    `json:"banner"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+func (p *Postgres) ListResults() ([]ResultRow, error) {
 	rows, err := p.db.Query(`
 		SELECT
-			h.ip,
+			h.ip::text,
 			p.port,
 			p.proto,
-			p.service,
-			p.banner,
+			COALESCE(p.service, 'unknown'),
+			COALESCE(p.banner, ''),
 			p.first_seen,
 			p.last_seen
 		FROM ports p
@@ -22,10 +35,10 @@ func (p *Postgres) ListResults() ([]*model.ScanResult, error) {
 	}
 	defer rows.Close()
 
-	var res []*model.ScanResult
+	out := make([]ResultRow, 0, 128)
 
 	for rows.Next() {
-		var r model.ScanResult
+		var r ResultRow
 		if err := rows.Scan(
 			&r.IP,
 			&r.Port,
@@ -37,8 +50,8 @@ func (p *Postgres) ListResults() ([]*model.ScanResult, error) {
 		); err != nil {
 			return nil, err
 		}
-		res = append(res, &r)
+		out = append(out, r)
 	}
 
-	return res, nil
+	return out, rows.Err()
 }

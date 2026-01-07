@@ -28,13 +28,12 @@ func (r *Runner) RunAsync(cfg *config.Config) {
 }
 
 /*
-RunOnceWithContext — управляет mutex, ctx/cancel, hub
+RunOnceWithContext — mutex + ctx/cancel + hub
 */
 func (r *Runner) RunOnceWithContext(cfg *config.Config) (*model.ScanRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// временно подменяем конфиг
 	orig := r.cfg
 	r.cfg = cfg
 	defer func() { r.cfg = orig }()
@@ -60,9 +59,13 @@ func (r *Runner) RunOnceWithContext(cfg *config.Config) (*model.ScanRun, error) 
 }
 
 /*
-RunOnceCtx — ctx-aware версия RunOnce
+RunOnceCtx — ctx-aware scan
 */
 func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
+	if r.pg == nil && r.store == nil {
+		return nil, fmt.Errorf("no storage configured (pg=nil and store=nil)")
+	}
+
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -94,7 +97,7 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 
 	dec := envdetect.Decide(r.cfg.Targets)
 
-	// auto interface
+	// auto iface
 	if r.cfg.Interface == "" {
 		ifc, err := envdetect.DetectDefaultInterface()
 		if err == nil {
@@ -102,7 +105,7 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 		}
 	}
 
-	// auto wait
+	// wait
 	wait := r.cfg.WaitSeconds
 	if wait <= 0 {
 		wait = dec.WaitSeconds
@@ -111,7 +114,7 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 	resolvedPorts := resolvePorts(r.cfg.Ports, dec.PreferredEngine)
 
 	run := &model.ScanRun{
-		ID:           fmt.Sprintf("%d", time.Now().UTC().UnixNano()),
+		ID:           newUUID(),
 		StartedAt:    time.Now().UTC(),
 		TargetsCount: len(r.cfg.Targets),
 		PortsSpec:    resolvedPorts,
@@ -196,36 +199,49 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 			svc = "unknown"
 		}
 
-		hostID, err := r.pg.UpsertHost(fr.IP)
-		if err != nil {
-			logger.Errorf("upsert host error: %v", err)
-			continue
+		// ✅ Пишем результаты в Postgres (если подключен)
+		if r.pg != nil {
+			// нормализация IP для inet (убираем скобки и мусор)
+			ip := strings.TrimSpace(fr.IP)
+			ip = strings.TrimPrefix(ip, "(")
+			ip = strings.TrimSuffix(ip, ")")
+
+			hostID, err := r.pg.UpsertHost(ip)
+			if err != nil {
+				logger.Errorf("upsert host error: %v (ip=%q)", err, ip)
+				continue
+			}
+
+			isNew, err := r.pg.UpsertPort(
+				hostID,
+				int(fr.Port),
+				strings.ToLower(fr.Proto),
+				svc,
+				bnr,
+			)
+
+			if err != nil {
+				logger.Errorf("upsert port error: %v", err)
+				continue
+			}
+
+			if isNew {
+				newFound++
+				_ = r.pg.AddEvent("new_port", map[string]any{
+					"ip":      fr.IP,
+					"port":    int(fr.Port),
+					"service": svc,
+				})
+			}
 		}
 
-		isNew, err := r.pg.UpsertPort(
-			hostID,
-			int(fr.Port),
-			strings.ToLower(fr.Proto),
-			svc,
-			bnr,
-		)
-		if err != nil {
-			logger.Errorf("upsert port error: %v", err)
-			continue
-		}
-
-		if isNew {
-			newFound++
-			_ = r.pg.AddEvent("new_port", map[string]any{
-				"ip":      fr.IP,
-				"port":    fr.Port,
-				"service": svc,
-			})
-		}
-
-		if time.Since(lastTick) > 700*time.Millisecond {
+		// прогресс
+		if time.Since(lastTick) > 700*time.Millisecond && len(found) > 0 {
 			lastTick = time.Now()
 			p := 70 + int(float64(i+1)/float64(len(found))*25.0)
+			if p > 95 {
+				p = 95
+			}
 			r.hub.Publish(Progress{Percent: p, Message: fmt.Sprintf("Processed %d/%d", i+1, len(found))})
 		}
 	}
@@ -235,7 +251,14 @@ func (r *Runner) RunOnceCtx(ctx context.Context) (*model.ScanRun, error) {
 	run.NewFound = newFound
 	run.Engine = engineUsed
 
-	_ = r.store.AddScanRun(run)
+	// ✅ scan-run в Postgres
+	if r.pg != nil {
+		if err := r.pg.AddScanRun(run, r.cfg.Targets); err != nil {
+			logger.Errorf("add scan run failed: %v", err)
+		}
+	} else if r.store != nil {
+		_ = r.store.AddScanRun(run)
+	}
 
 	r.hub.Publish(Progress{Percent: 98, Message: "Finalizing"})
 	return run, nil

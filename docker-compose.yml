@@ -3,7 +3,6 @@ version: "3.9"
 services:
   portscanner:
     build: .
-    container_name: portscanner
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -12,11 +11,12 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       DATABASE_DSN: postgres://portscanner:portscanner@postgres:5432/portscanner?sslmode=disable
     ports:
-      - "8088:8088" 
+      - "8088:8088"
 
   postgres:
     image: postgres:16
@@ -27,6 +27,11 @@ services:
       POSTGRES_PASSWORD: portscanner
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portscanner"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:

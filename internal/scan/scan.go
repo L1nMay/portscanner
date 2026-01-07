@@ -1,6 +1,8 @@
 package scan
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -19,10 +21,10 @@ import (
 
 type Runner struct {
 	cfg   *config.Config
-	pg *storage.Postgres
-	store *storage.Storage
-	mu    sync.Mutex
+	pg    *storage.Postgres
+	store *storage.Storage // ✅ возвращаем, чтобы старый код не ломался
 
+	mu       sync.Mutex
 	muCancel cancelState
 	hub      *Hub
 }
@@ -45,7 +47,19 @@ func checkBinary(name string) error {
 	return nil
 }
 
-// RunOnce оставляем как “старый синхронный” вариант (можно использовать для CLI/скрипта)
+// newUUID generates UUIDv4-like string without external deps.
+func newUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	// version(4) and variant(10)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+
+	hexs := hex.EncodeToString(b)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hexs[0:8], hexs[8:12], hexs[12:16], hexs[16:20], hexs[20:32])
+}
+
+// RunOnce — синхронный запуск (CLI)
 func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -57,6 +71,7 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 		logger.Errorf("masscan check: %v", err)
 	}
 
+	// auto targets
 	if r.cfg.AutoTargets && len(r.cfg.Targets) == 0 {
 		ni, err := envdetect.DetectNetInfo()
 		if err == nil && ni.SrcIP != "" {
@@ -74,6 +89,7 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 
 	dec := envdetect.Decide(r.cfg.Targets)
 
+	// auto interface
 	if r.cfg.Interface == "" {
 		ifc, err := envdetect.DetectDefaultInterface()
 		if err == nil {
@@ -84,6 +100,7 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 		}
 	}
 
+	// auto wait
 	wait := r.cfg.WaitSeconds
 	if wait <= 0 {
 		wait = dec.WaitSeconds
@@ -93,7 +110,7 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 	resolvedPorts := resolvePorts(r.cfg.Ports, dec.PreferredEngine)
 
 	run := &model.ScanRun{
-		ID:           fmt.Sprintf("%d", time.Now().UTC().UnixNano()),
+		ID:           newUUID(),
 		StartedAt:    time.Now().UTC(),
 		TargetsCount: len(r.cfg.Targets),
 		PortsSpec:    resolvedPorts,
@@ -148,7 +165,7 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 		}
 	}
 
-	newOnes := []*model.ScanResult{}
+	newOnes := make([]*model.ScanResult, 0)
 	totalFound := 0
 	newFound := 0
 	seen := map[string]struct{}{}
@@ -168,21 +185,57 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 
 		res := &model.ScanResult{
 			IP:      fr.IP,
-			Port:    fr.Port,
+			Port:    int(fr.Port), // ✅ приводим тип
 			Proto:   strings.ToLower(fr.Proto),
 			Banner:  bnr,
 			Service: svc,
 		}
 
-		isNew, err := r.store.UpsertResult(res)
-		if err != nil {
-			logger.Errorf("store upsert error for %s: %v", key, err)
+		// ✅ PostgreSQL
+		if r.pg != nil {
+			ip := strings.TrimSpace(fr.IP)
+			ip = strings.TrimPrefix(ip, "(")
+			ip = strings.TrimSuffix(ip, ")")
+
+			hostID, err := r.pg.UpsertHost(ip)
+			if err != nil {
+				logger.Errorf("upsert host error for %s: %v", ip, err)
+				continue
+			}
+
+			isNew, err := r.pg.UpsertPort(hostID, int(fr.Port), strings.ToLower(fr.Proto), svc, bnr)
+			if err != nil {
+				logger.Errorf("upsert port error for %s: %v", key, err)
+				continue
+			}
+
+			if isNew {
+				newFound++
+				newOnes = append(newOnes, res)
+
+				if err := r.pg.AddEvent("new_port", map[string]any{
+					"ip":      fr.IP,
+					"port":    int(fr.Port),
+					"service": svc,
+				}); err != nil {
+					logger.Errorf("add event error: %v", err)
+				}
+			}
+
 			continue
 		}
 
-		if isNew {
-			newFound++
-			newOnes = append(newOnes, res)
+		// ✅ legacy sqlite
+		if r.store != nil {
+			isNew, err := r.store.UpsertResult(res)
+			if err != nil {
+				logger.Errorf("store upsert error for %s: %v", key, err)
+				continue
+			}
+			if isNew {
+				newFound++
+				newOnes = append(newOnes, res)
+			}
 		}
 	}
 
@@ -191,7 +244,14 @@ func (r *Runner) RunOnce() (*model.ScanRun, []*model.ScanResult, error) {
 	run.NewFound = newFound
 	run.Engine = engineUsed
 
-	_ = r.store.AddScanRun(run)
+	// ✅ сохраняем scan-run
+	if r.pg != nil {
+		if err := r.pg.AddScanRun(run, r.cfg.Targets); err != nil {
+			logger.Errorf("add scan run failed: %v", err)
+		}
+	} else if r.store != nil {
+		_ = r.store.AddScanRun(run)
+	}
 
 	return run, newOnes, nil
 }

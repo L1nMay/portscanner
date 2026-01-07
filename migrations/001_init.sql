@@ -34,5 +34,5 @@ CREATE TABLE IF NOT EXISTS events (
     type TEXT NOT NULL,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sent BOOLEAN NOT NULL DEFAULT false
+    delivered BOOLEAN NOT NULL DEFAULT false
 );

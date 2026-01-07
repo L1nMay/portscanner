@@ -9,8 +9,11 @@ func (p *Postgres) UpsertPort(
 ) (bool, error) {
 
 	var isNew bool
+
 	err := p.db.QueryRow(`
-		INSERT INTO ports (host_id, port, proto, service, banner, first_seen, last_seen)
+		INSERT INTO ports (
+			host_id, port, proto, service, banner, first_seen, last_seen
+		)
 		VALUES ($1,$2,$3,$4,$5,now(),now())
 		ON CONFLICT (host_id, port, proto)
 		DO UPDATE SET
