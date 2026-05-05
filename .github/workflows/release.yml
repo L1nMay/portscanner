@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish, for example v1.2.3"
+        description: "Tag to publish, for example v1.2.3"
         required: true
         type: string
       prerelease:
@@ -30,12 +30,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Resolve and validate tag
+      - name: Resolve tag
         id: release
         shell: bash
         run: |
@@ -52,33 +47,43 @@ jobs:
             exit 1
           fi
 
-          git fetch --tags --force
-
-          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "Tag '$TAG' does not exist in this repository. Create and push it first." >&2
-            exit 1
-          fi
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Check remote tag exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" > /dev/null
+
+      - name: Check release does not already exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if gh api "repos/${GH_REPO}/releases/tags/${TAG}" > /dev/null 2>&1; then
+            echo "Release for tag '${TAG}' already exists." >&2
+            exit 1
+          fi
 
       - name: Create GitHub Release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag }}
           PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
-          args=(
-            --repo "$GH_REPO"
-            --verify-tag
-            --generate-notes
-            --fail-on-no-commits
-          )
-
-          if [[ "$PRERELEASE" == "true" ]]; then
-            args+=(--prerelease)
-          fi
-
-          gh release create "$TAG" "${args[@]}"
+          gh api \
+            --method POST \
+            "repos/${GH_REPO}/releases" \
+            -f tag_name="${TAG}" \
+            -f name="${TAG}" \
+            -F draft=false \
+            -F prerelease="${PRERELEASE}" \
+            -F generate_release_notes=true
