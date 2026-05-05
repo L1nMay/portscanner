@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+
   workflow_dispatch:
     inputs:
       tag:
@@ -29,6 +30,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Resolve and validate tag
         id: release
         shell: bash
@@ -46,6 +52,13 @@ jobs:
             exit 1
           fi
 
+          git fetch --tags --force
+
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag '$TAG' does not exist in this repository. Create and push it first." >&2
+            exit 1
+          fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
@@ -53,10 +66,12 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag }}
           PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           args=(
+            --repo "$GH_REPO"
             --verify-tag
             --generate-notes
             --fail-on-no-commits
